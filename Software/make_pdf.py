@@ -1,0 +1,499 @@
+#!/usr/bin/env python3
+"""
+1:1 real-size PDF of all Lochraster PCBs.
+One A4-landscape page per board: front side (left) and back side / mirrored (right).
+All boards at the same 1:1 scale.
+Print at exactly 100 % (no scaling) – verify against the 10 mm scale bar.
+"""
+import re, os, math
+from reportlab.lib.units  import mm
+from reportlab.lib.colors import HexColor, Color, black, white
+from reportlab.pdfgen     import canvas as rl_canvas
+
+# ── Colours ──────────────────────────────────────────────────────────────────
+PCB_GREEN  = HexColor('#2d5016')
+PCB_EDGE   = HexColor('#1a3a0a')
+COPPER     = HexColor('#c8a020')
+COPPER_DIM = HexColor('#7a5a10')
+SILK       = HexColor('#e0e0e0')
+HOLE_BG    = black
+RAIL_GND   = HexColor('#3355cc')
+RAIL_VCC   = HexColor('#cc3333')
+TEXT_DARK  = HexColor('#111111')
+TEXT_GREY  = HexColor('#666666')
+DIVIDER    = HexColor('#cccccc')
+# Semi-transparent zone fills
+ZONE_GND   = Color(0.2, 0.33, 0.8, alpha=0.25)   # blue, 25 % opacity
+ZONE_VCC   = Color(0.8, 0.2, 0.2, alpha=0.25)     # red, 25 % opacity
+
+# ── Page layout (all mm, A4 landscape = 297 × 210) ───────────────────────────
+A4W = 297.0
+A4H = 210.0
+CR  = 4.0      # board corner radius
+
+TITLE_H  =  8.0   # title strip at page top
+SUBLBL_H =  5.5   # "Vorderseite / Rückseite" strip below title
+SCALE_H  =  9.0   # scale-bar strip below board
+VPAD     =  3.0   # extra vertical padding (top & bottom of board within remaining space)
+HGAP     =  8.0   # horizontal gap between front and back drawing
+
+TYPE_LABEL = {
+    'unconnected': 'Unverbunden',
+    'stripboard' : 'Streifenraster',
+    'group_3'    : '3er-Gruppen',
+    'breadboard' : 'Steckbrett',
+}
+
+# ── S-expr module-body extractor ─────────────────────────────────────────────
+def module_bodies(text, prefix):
+    """Return list of full (module/footprint PREFIX…) strings by counting parens."""
+    out = []
+    # Match both KiCad 5 (module X …) and KiCad 9 (footprint "X" …)
+    pat = r'\((module|footprint)\s+"?' + re.escape(prefix)
+    for m in re.finditer(pat, text):
+        start = m.start(); depth = 0; i = start
+        while i < len(text):
+            ch = text[i]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    out.append(text[start:i + 1])
+                    break
+            i += 1
+    return out
+
+
+# ── PCB parser ────────────────────────────────────────────────────────────────
+def parse_pcb(path):
+    """
+    Returns dict:
+      pads       [(x,y)]                  Lochraster thru-hole centres
+      segs       {layer: [(x1,y1,x2,y2,w)]}
+      gr_lines   {layer: [(x1,y1,x2,y2,w)]}  (no Edge.Cuts)
+      gr_texts   {layer: [(x,y,angle,text)]}
+      mod_pads   [(x,y,pw,ph,is_oval)]    Power-terminal pads (absolute)
+      mod_texts  {layer: [(x,y,angle,text)]}  Power-terminal labels
+    """
+    text = open(path).read()
+
+    # ── Lochraster pads (KiCad 5: module inline, KiCad 9: footprint multiline) ──
+    pads = [(float(a), float(b)) for a, b in
+            re.findall(
+                r'\(module\s+Lochraster_Pad[^\n]*\(at\s+([\d.]+)\s+([\d.]+)\)', text)]
+    if not pads:
+        # KiCad 9 format: (footprint "Lochraster_Pad" ... (at X Y) on next lines
+        for body in module_bodies(text, 'Lochraster_Pad'):
+            m = re.search(r'\(at\s+([\d.]+)\s+([\d.]+)\)', body)
+            if m:
+                pads.append((float(m.group(1)), float(m.group(2))))
+
+    # ── Segments {layer: [(x1,y1,x2,y2,w)]} ─────────────────────────────
+    segs = {}
+    # KiCad 5: single-line.  KiCad 9: multiline with optional quotes on layer
+    for a, b, c_, d, w, lyr in re.findall(
+            r'\(segment\s+\(start\s+([\d.]+)\s+([\d.]+)\)\s+'
+            r'\(end\s+([\d.]+)\s+([\d.]+)\)\s+'
+            r'\(width\s+([\d.]+)\)\s+\(layer\s+([\w.]+)\)', text):
+        segs.setdefault(lyr, []).append(
+            (float(a), float(b), float(c_), float(d), float(w)))
+    # KiCad 9 multiline: fields on separate lines, layer may be quoted
+    if not segs:
+        for m in re.finditer(
+                r'\(segment\s*\n\s*\(start\s+([\d.]+)\s+([\d.]+)\)\s*\n'
+                r'\s*\(end\s+([\d.]+)\s+([\d.]+)\)\s*\n'
+                r'\s*\(width\s+([\d.]+)\)\s*\n'
+                r'\s*\(layer\s+"?([\w.]+)"?\)', text):
+            a, b, c_, d, w, lyr = m.groups()
+            segs.setdefault(lyr, []).append(
+                (float(a), float(b), float(c_), float(d), float(w)))
+
+    # ── gr_lines {layer: [(x1,y1,x2,y2,w)]} ─────────────────────────────
+    gr_lines = {}
+    # KiCad 5 inline: two orderings
+    _gl_base = r'\(gr_line\s+\(start\s+([\d.]+)\s+([\d.]+)\)\s+\(end\s+([\d.]+)\s+([\d.]+)\)'
+    for a, b, c_, d, lyr, w in re.findall(
+            _gl_base + r'[^)]*\(layer\s+([\w.]+)\)[^)]*\(width\s+([\d.]+)\)', text):
+        if lyr != 'Edge.Cuts':
+            gr_lines.setdefault(lyr, []).append(
+                (float(a), float(b), float(c_), float(d), float(w)))
+    for a, b, c_, d, w, lyr in re.findall(
+            _gl_base + r'\s+\(width\s+([\d.]+)\)\s+\(layer\s+([\w.]+)\)', text):
+        if lyr != 'Edge.Cuts':
+            gr_lines.setdefault(lyr, []).append(
+                (float(a), float(b), float(c_), float(d), float(w)))
+    # KiCad 9 multiline: (gr_line (start ..) (end ..) (stroke (width W) (type ..)) (layer "L"))
+    for m in re.finditer(
+            r'\(gr_line\s*\n\s*\(start\s+([\d.]+)\s+([\d.]+)\)\s*\n'
+            r'\s*\(end\s+([\d.]+)\s+([\d.]+)\)\s*\n'
+            r'\s*\(stroke\s*\n\s*\(width\s+([\d.]+)\)[\s\S]*?\)\s*\n'
+            r'\s*\(layer\s+"?([\w.]+)"?\)', text):
+        a, b, c_, d, w, lyr = m.groups()
+        if lyr != 'Edge.Cuts':
+            gr_lines.setdefault(lyr, []).append(
+                (float(a), float(b), float(c_), float(d), float(w)))
+
+    # ── gr_texts {layer: [(x,y,angle,text)]} ─────────────────────────────
+    gr_texts = {}
+    # KiCad 5 inline + KiCad 9 multiline (layer may be quoted)
+    for txt, x, y, ang, lyr in re.findall(
+            r'\(gr_text\s+"([^"]+)"\s+\(at\s+([\d.]+)\s+([\d.]+)'
+            r'(?:\s+([-\d.]+))?\)\s+\(layer\s+"?([\w.]+)"?\)', text):
+        gr_texts.setdefault(lyr, []).append(
+            (float(x), float(y), float(ang or 0), txt))
+    # KiCad 9 multiline: (at ..) on next line, (layer ..) on line after
+    if not gr_texts:
+        for m in re.finditer(
+                r'\(gr_text\s+"([^"]+)"\s*\n\s*\(at\s+([\d.]+)\s+([\d.]+)'
+                r'(?:\s+([-\d.]+))?\)\s*\n\s*\(layer\s+"?([\w.]+)"?\)', text):
+            txt, x, y, ang, lyr = m.groups()
+            gr_texts.setdefault(lyr, []).append(
+                (float(x), float(y), float(ang or 0), txt))
+
+    # ── Power-terminal module pads + fp_texts ────────────────────────────
+    mod_pads  = []
+    mod_texts = {}
+    for body in module_bodies(text, 'Power_'):
+        # KiCad 5: (module X (layer L) (at X Y))  KiCad 9: multiline with quotes
+        hdr = re.search(
+            r'\((module|footprint)\s+\S+\s+\(layer\s+\S+\)\s+\(at\s+([\d.]+)\s+([\d.]+)\)', body)
+        if not hdr:
+            hdr = re.search(
+                r'\((module|footprint)\s+"[^"]+"\s*\n\s*\(layer\s+"?\S+"?\)\s*\n'
+                r'\s*\(uuid\s+"[^"]+"\)\s*\n\s*\(at\s+([\d.]+)\s+([\d.]+)\)', body)
+        if not hdr:
+            continue
+        mx, my = float(hdr.group(2)), float(hdr.group(3))
+
+        for shape, prx, pry, psw, psh in re.findall(
+                r'\(pad\s+"?\S+"?\s+thru_hole\s+(\w+)\s*\n?\s*'
+                r'\(at\s+([-\d.]+)\s+([-\d.]+)\)\s*\n?\s*'
+                r'\(size\s+([\d.]+)\s+([\d.]+)\)', body):
+            mod_pads.append((mx + float(prx), my + float(pry),
+                             float(psw), float(psh), shape == 'oval'))
+
+        for m2 in re.finditer(
+                r'\(fp_text\s+(\S+)\s+"([^"]+)"\s*\n?\s*'
+                r'\(at\s+([-\d.]+)\s+([-\d.]+)(?:\s+([-\d.]+))?\)\s*\n?\s*'
+                r'\(layer\s+"?([\w.]+)"?\)\s*(hide)?', body):
+            ftype, ftt, frx, fry, fang, flyr, hidden = m2.groups()
+            if hidden or ftype != 'user':
+                continue
+            if flyr in ('F.SilkS', 'B.SilkS'):
+                mod_texts.setdefault(flyr, []).append(
+                    (mx + float(frx), my + float(fry),
+                     float(fang or 0), ftt))
+
+    # ── Copper zones (actual filled polygons with thermal reliefs) ───────
+    zones = []   # [(net_name, layer, [(x,y), ...])]
+    for zm in re.finditer(
+            r'\(zone\s*\n\s*\(net\s+\d+\)\s*\n\s*\(net_name\s+"([^"]*)"\)', text):
+        net_name = zm.group(1)
+        # Extract the full zone block
+        start = zm.start(); depth = 0; i = start
+        while i < len(text):
+            if text[i] == '(': depth += 1
+            elif text[i] == ')':
+                depth -= 1
+                if depth == 0: break
+            i += 1
+        zone_text = text[start:i + 1]
+        # Each zone can have multiple filled_polygon entries (actual copper)
+        for fp in re.finditer(
+                r'\(filled_polygon\s*\n\s*\(layer\s+"([^"]*)"\)\s*\n\s*\(pts\s*\n'
+                r'((?:.*\n)*?)\s*\)\s*\)', zone_text):
+            layer = fp.group(1)
+            pts = [(float(a), float(b))
+                   for a, b in re.findall(r'\(xy\s+([\d.]+)\s+([\d.]+)\)',
+                                          fp.group(2))]
+            if pts:
+                zones.append((net_name, layer, pts))
+
+    return dict(pads=pads, segs=segs, gr_lines=gr_lines,
+                gr_texts=gr_texts, mod_pads=mod_pads, mod_texts=mod_texts,
+                zones=zones)
+
+
+# ── Text helper ───────────────────────────────────────────────────────────────
+def draw_rotated_text(c, x_pt, y_pt, text_str, kicad_angle, side, font_pt,
+                      halign='center'):
+    """
+    Draw text at (x_pt, y_pt) in page coords.
+    KiCad angle = CCW in Y-down screen.
+    Front: flip Y   → pdf_angle = -kicad_angle
+    Back:  flip X+Y → pdf_angle = +kicad_angle  (double flip cancels)
+    """
+    pdf_angle = -kicad_angle if side == 'F' else kicad_angle
+    c.saveState()
+    c.translate(x_pt, y_pt)
+    c.rotate(pdf_angle)
+    c.setFont('Helvetica', font_pt)
+    # Shift down by ~1/3 of font size to centre text on its KiCad origin
+    # (reportlab draws from baseline, KiCad centres vertically)
+    dy = -font_pt * 0.33
+    if halign == 'center':
+        c.drawCentredString(0, dy, text_str)
+    elif halign == 'right':
+        c.drawRightString(0, dy, text_str)
+    else:
+        c.drawString(0, dy, text_str)
+    c.restoreState()
+
+
+# ── Single-side PCB renderer ──────────────────────────────────────────────────
+def render_side(c, bw, bh, board_left_mm, board_top_mm, d, side):
+    """
+    Draw one PCB side at 1:1 scale.
+
+    Coordinate convention
+    ─────────────────────
+    board_top_mm  : Y of board's KiCad top edge (ky=0), measured UP from page bottom (mm)
+    board_left_mm : X of board's KiCad left edge (kx=0), measured from page left (mm)
+    side : 'F' = front (kx left→right), 'B' = back (kx mirrored)
+
+    ry(ky) = (board_top_mm - ky) * mm   → KiCad top=0 maps to board_top_mm in page
+    rx(kx) front = (board_left_mm + kx) * mm
+    rx(kx) back  = (board_left_mm + bw - kx) * mm
+    """
+    def rx(kx):
+        return (board_left_mm + kx) * mm if side == 'F' \
+               else (board_left_mm + bw - kx) * mm
+
+    def ry(ky):
+        return (board_top_mm - ky) * mm
+
+    # ── PCB background ────────────────────────────────────────────────────
+    # roundRect: lower-left corner, width, height
+    c.setFillColor(PCB_GREEN)
+    c.setStrokeColor(PCB_EDGE)
+    c.setLineWidth(0.4)
+    c.roundRect(rx(0) if side == 'F' else rx(bw),
+                ry(bh),
+                bw * mm, bh * mm, CR * mm, stroke=1, fill=1)
+
+    # ── Copper zone fills (semi-transparent) ──────────────────────────────
+    cu_layer = 'F.Cu' if side == 'F' else 'B.Cu'
+    for net_name, layer, pts in d.get('zones', []):
+        if layer != cu_layer:
+            continue
+        fill = ZONE_GND if net_name == 'GND' else ZONE_VCC
+        c.saveState()
+        c.setFillColor(fill)
+        c.setStrokeColor(fill)
+        c.setLineWidth(0)
+        p = c.beginPath()
+        p.moveTo(rx(pts[0][0]), ry(pts[0][1]))
+        for kx_, ky_ in pts[1:]:
+            p.lineTo(rx(kx_), ry(ky_))
+        p.close()
+        c.drawPath(p, stroke=0, fill=1)
+        c.restoreState()
+
+    # ── Copper traces ─────────────────────────────────────────────────────
+    # Inner traces live on B.Cu only; rail/terminal traces on both F.Cu+B.Cu.
+    # We draw B.Cu on both sides so inner traces are always visible.
+
+    # Build alternating-rail colour map: rail segments (w≈1.5) at each outer
+    # x column are GND/VCC pairs — top pair = GND (even index), alternating.
+    rail_y_idx = {}   # x_round → {y_round: pair_index}
+    for x1, y1, x2, y2, w in d['segs'].get('B.Cu', []):
+        if abs(w - 1.5) < 0.05:
+            xr = round(x1, 2)
+            yr = round(min(y1, y2), 2)
+            rail_y_idx.setdefault(xr, set()).add(yr)
+    for xr in rail_y_idx:
+        sorted_ys = sorted(rail_y_idx[xr])
+        rail_y_idx[xr] = {y: i for i, y in enumerate(sorted_ys)}
+
+    def rail_colour(x1, y1, w):
+        if abs(w - 1.5) < 0.05:
+            xr = round(x1, 2)
+            yr = round(min(y1, y1), 2)
+            idx_map = rail_y_idx.get(xr)
+            if idx_map:
+                # find closest y
+                yr2 = min(idx_map.keys(), key=lambda y: abs(y - yr))
+                return RAIL_VCC if idx_map[yr2] % 2 == 1 else RAIL_GND
+        return None
+
+    # Draw B.Cu (inner traces + rail traces) on both front and back
+    for x1, y1, x2, y2, w in d['segs'].get('B.Cu', []):
+        rc = rail_colour(x1, y1, w)
+        if rc:
+            c.setStrokeColor(rc);  c.setLineWidth(0.8)
+        else:
+            c.setStrokeColor(COPPER);  c.setLineWidth(max(0.4, w * 0.3))
+        c.line(rx(x1), ry(y1), rx(x2), ry(y2))
+
+    # Draw F.Cu (terminal bridge traces only; not duplicated on B.Cu)
+    bcu_set = {(round(x1,3),round(y1,3),round(x2,3),round(y2,3))
+               for x1,y1,x2,y2,w in d['segs'].get('B.Cu', [])}
+    for x1, y1, x2, y2, w in d['segs'].get('F.Cu', []):
+        if (round(x1,3),round(y1,3),round(x2,3),round(y2,3)) not in bcu_set:
+            c.setStrokeColor(COPPER_DIM);  c.setLineWidth(max(0.3, w * 0.2))
+            c.line(rx(x1), ry(y1), rx(x2), ry(y2))
+
+    # ── Lochraster pads: copper ring + drill hole ─────────────────────────
+    for kx, ky in d['pads']:
+        px, py = rx(kx), ry(ky)
+        c.setFillColor(COPPER)
+        c.setStrokeColor(COPPER_DIM)
+        c.setLineWidth(0.12)
+        c.circle(px, py, 0.9 * mm, stroke=1, fill=1)
+        c.setFillColor(HOLE_BG)
+        c.setStrokeColor(HOLE_BG)
+        c.circle(px, py, 0.5 * mm, stroke=0, fill=1)
+
+    # ── Power-terminal pads ───────────────────────────────────────────────
+    for kx, ky, pw, ph, is_oval in d['mod_pads']:
+        px, py = rx(kx), ry(ky)
+        c.setFillColor(COPPER)
+        c.setStrokeColor(COPPER_DIM)
+        c.setLineWidth(0.2)
+        if is_oval:
+            hw, hh = pw / 2 * mm, ph / 2 * mm
+            c.ellipse(px - hw, py - hh, px + hw, py + hh, stroke=1, fill=1)
+            # Oval drill hole (rounded rectangle matching KiCad oval pad drill)
+            c.setFillColor(HOLE_BG)
+            drill_w, drill_h = 2.0 * mm, 5.0 * mm
+            drill_r = min(drill_w, drill_h) / 2  # radius = half of shorter side
+            c.roundRect(px - drill_w / 2, py - drill_h / 2,
+                        drill_w, drill_h, drill_r, stroke=0, fill=1)
+        else:
+            r_pad = min(pw, ph) / 2 * mm
+            c.circle(px, py, r_pad, stroke=1, fill=1)
+            c.setFillColor(HOLE_BG)
+            c.circle(px, py, 0.5 * mm, stroke=0, fill=1)
+
+    # ── Silkscreen lines (trace visualisation + logo lines) ───────────────
+    # w is in KiCad mm; multiply by `mm` (=2.834 pt/mm) to get reportlab points
+    silk_lyr = 'F.SilkS' if side == 'F' else 'B.SilkS'
+    for x1, y1, x2, y2, w in d['gr_lines'].get(silk_lyr, []):
+        c.setStrokeColor(SILK)
+        c.setLineWidth(max(0.5, w * mm))   # w in mm → points
+        c.line(rx(x1), ry(y1), rx(x2), ry(y2))
+
+    # ── Silkscreen gr_text (branding, GND/VCC outer-rail labels) ──────────
+    c.setFillColor(SILK)
+    for kx, ky, ang, txt in d['gr_texts'].get(silk_lyr, []):
+        fsize  = 5.5 if txt in ('GND', 'VCC') else 4.2
+        halign = 'center' if txt in ('GND', 'VCC') else 'left'
+        draw_rotated_text(c, rx(kx), ry(ky), txt, ang, side, fsize, halign)
+
+    # ── Power-terminal fp_text labels ─────────────────────────────────────
+    for kx, ky, ang, txt in d['mod_texts'].get(silk_lyr, []):
+        c.setFillColor(SILK)
+        draw_rotated_text(c, rx(kx), ry(ky), txt, ang, side, 5.0, 'center')
+
+    # ── Board outline on top of everything ────────────────────────────────
+    c.setFillColor(HexColor('#00000000'))
+    c.setStrokeColor(PCB_EDGE)
+    c.setLineWidth(0.7)
+    c.roundRect(rx(0) if side == 'F' else rx(bw),
+                ry(bh),
+                bw * mm, bh * mm, CR * mm, stroke=1, fill=0)
+
+
+# ── Page compositor ───────────────────────────────────────────────────────────
+def make_page(c, bw, bh, btype, d):
+    """
+    Lay out one A4-landscape page:
+      • title strip at top
+      • "Vorderseite" / "Rückseite" sub-labels
+      • front board (left half) and back board (right half) – both 1:1
+      • 10 mm scale bars + dimension text below each board
+    """
+    # ── Vertical geometry ────────────────────────────────────────────────
+    # Usable board height (between title+sublabel strip and scale bar strip)
+    usable_h = A4H - TITLE_H - SUBLBL_H - SCALE_H
+    # Centre board vertically in usable area (add padding top/bottom if board smaller)
+    extra     = max(0.0, usable_h - bh - 2 * VPAD)
+    board_bot = SCALE_H + VPAD + extra / 2          # mm from page bottom
+    board_top = board_bot + bh                       # mm from page bottom
+
+    # ── Horizontal geometry ───────────────────────────────────────────────
+    half_w   = (A4W - HGAP) / 2
+    left_f   = (half_w - bw) / 2                    # front board left edge (mm)
+    left_b   = half_w + HGAP + (half_w - bw) / 2   # back  board left edge (mm)
+
+    # ── Draw both sides ───────────────────────────────────────────────────
+    render_side(c, bw, bh, left_f, board_top, d, 'F')
+    render_side(c, bw, bh, left_b, board_top, d, 'B')
+
+    # ── Dashed centre divider ─────────────────────────────────────────────
+    div_x = (half_w + HGAP / 2) * mm
+    c.setStrokeColor(DIVIDER)
+    c.setLineWidth(0.25)
+    c.setDash([2, 2])
+    c.line(div_x, 0, div_x, A4H * mm)
+    c.setDash([])
+
+    # ── Page title ────────────────────────────────────────────────────────
+    c.setFillColor(TEXT_DARK)
+    c.setFont('Helvetica-Bold', 7.5)
+    c.drawCentredString(
+        A4W / 2 * mm, (A4H - TITLE_H / 2) * mm,
+        f"Lochraster  {bw}\u00d7{bh} mm  \u2014  "
+        f"{TYPE_LABEL.get(btype, btype)}  |  "
+        f"Ma\u00dfstab 1:1  |  Raster 2.54 mm  |  Bohrung \u00d8 1.0 mm")
+
+    # ── Sub-labels ────────────────────────────────────────────────────────
+    sub_y = (A4H - TITLE_H - SUBLBL_H / 2) * mm
+    c.setFont('Helvetica-Bold', 5.5)
+    c.setFillColor(TEXT_GREY)
+    for ox_b, lbl in ((left_f, "Vorderseite  (F.Cu + F.SilkS)"),
+                      (left_b, "R\u00fcckseite  (B.Cu + B.SilkS)  [gespiegelt]")):
+        c.drawCentredString((ox_b + bw / 2) * mm, sub_y, lbl)
+
+    # ── 10 mm scale bars ──────────────────────────────────────────────────
+    bar_y  = (SCALE_H * 0.60) * mm
+    tick_h = 1.0 * mm
+    for ox_b in (left_f, left_b):
+        bx = ox_b * mm
+        c.setStrokeColor(TEXT_DARK)
+        c.setFillColor(TEXT_DARK)
+        c.setLineWidth(0.7)
+        c.line(bx,             bar_y, bx + 10 * mm, bar_y)
+        c.line(bx,             bar_y - tick_h, bx,             bar_y + tick_h)
+        c.line(bx + 10 * mm,   bar_y - tick_h, bx + 10 * mm,  bar_y + tick_h)
+        c.setFont('Helvetica', 4.5)
+        c.drawCentredString(bx + 5 * mm, bar_y - 2.8 * mm, "10 mm")
+
+    # ── Dimension labels ──────────────────────────────────────────────────
+    dim_y = (SCALE_H * 0.18) * mm
+    c.setFont('Helvetica', 4.5)
+    c.setFillColor(TEXT_GREY)
+    for ox_b in (left_f, left_b):
+        c.drawCentredString((ox_b + bw / 2) * mm, dim_y,
+                            f"\u21d4 {bw} mm   \u21d5 {bh} mm")
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+fnames = sorted(
+    f for f in os.listdir('.')
+    if re.match(r'proto_\d+x\d+_\w+\.kicad_pcb$', f))
+
+OUT = 'lochraster_real_size.pdf'
+c   = rl_canvas.Canvas(OUT, pagesize=(A4W * mm, A4H * mm))
+
+for fname in fnames:
+    m = re.match(r'proto_(\d+)x(\d+)_(\w+)\.kicad_pcb$', fname)
+    if not m:
+        continue
+    bw, bh = int(m.group(1)), int(m.group(2))
+    btype  = m.group(3)
+    d      = parse_pcb(fname)
+
+    c.setPageSize((A4W * mm, A4H * mm))
+    make_page(c, bw, bh, btype, d)
+    c.showPage()
+
+    print(f"  {fname}  [{bw}x{bh}mm"
+          f"  pads={len(d['pads'])}"
+          f"  B.Cu_segs={len(d['segs'].get('B.Cu', []))}"
+          f"  F.silk_txt={len(d['gr_texts'].get('F.SilkS', []))}"
+          f"  B.silk_lines={len(d['gr_lines'].get('B.SilkS', []))}]")
+
+c.save()
+print(f"\nDone: {OUT}  ({len(fnames)} pages, A4 landscape 297x210 mm)")

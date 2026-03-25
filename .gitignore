@@ -1,0 +1,21 @@
+# KiCad backup files
+*.kicad_pcb-bak
+*-backups/
+*.lck
+~*.lck
+_autosave-*
+fp-info-cache
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temp
+*.tmp
+*.svg

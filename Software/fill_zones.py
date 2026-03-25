@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""
+Fill zones in KiCad PCB files using pcbnew Python API.
+Run this after generate_lochraster.py to auto-fill all zones.
+
+Usage: 
+  "C:\Program Files\KiCad\9.0\bin\python.exe" fill_zones.py [pcb_file ...]
+"""
+import sys
+import os
+
+def fill_zones_in_file(pcb_path):
+    """Load a PCB file, fill all zones, and save it."""
+    import pcbnew
+    
+    if not os.path.exists(pcb_path):
+        print(f"File not found: {pcb_path}")
+        return False
+    
+    print(f"Loading: {pcb_path}")
+    board = pcbnew.LoadBoard(pcb_path)
+    
+    # Get the zone filler
+    filler = pcbnew.ZONE_FILLER(board)
+    
+    # Get all zones
+    zones = board.Zones()
+    if hasattr(zones, 'GetCount'):
+        zone_list = [zones[i] for i in range(zones.GetCount())]
+    else:
+        zone_list = list(zones)
+    
+    if not zone_list:
+        print(f"  No zones found in {pcb_path}")
+        return True
+    
+    print(f"  Found {len(zone_list)} zones, filling...")
+    
+    # Fill all zones
+    try:
+        filler.Fill(zone_list)
+    except Exception as e:
+        print(f"  Error filling zones: {e}")
+        return False
+    
+    # Save the board
+    print(f"  Saving: {pcb_path}")
+    pcbnew.SaveBoard(pcb_path, board)
+    
+    print(f"  Done!")
+    return True
+
+
+def main():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # If specific files provided, use those
+    if len(sys.argv) > 1:
+        pcb_files = [os.path.abspath(f) for f in sys.argv[1:] if f.endswith('.kicad_pcb')]
+    else:
+        # Find all PCB files with zones (unconnected and group_3)
+        pcb_files = []
+        for f in os.listdir(script_dir):
+            if f.startswith("proto_") and f.endswith(".kicad_pcb"):
+                if "unconnected" in f or "group_3" in f:
+                    pcb_files.append(os.path.join(script_dir, f))
+    
+    if not pcb_files:
+        print("No PCB files found to process.")
+        return 1
+    
+    print(f"Found {len(pcb_files)} PCB files with zones to fill:\n")
+    
+    success = True
+    for pcb_path in sorted(pcb_files):
+        if not fill_zones_in_file(pcb_path):
+            success = False
+        print()
+    
+    print("All done!" if success else "Some files failed.")
+    return 0 if success else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
