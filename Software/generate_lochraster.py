@@ -12,7 +12,15 @@ def image_to_kicad(image_path, pos_x, pos_y, max_width, max_height, layer="F.Sil
     except:
         return []
     w, h = img.size
+    # Cap resolution so line width (=scale) stays >= MIN_LINE_W mm
+    MIN_LINE_W = 0.02
     scale = min(max_width / w, max_height / h)
+    if scale < MIN_LINE_W:
+        factor = MIN_LINE_W / scale
+        new_w, new_h = max(1, int(w / factor)), max(1, int(h / factor))
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        w, h = img.size
+        scale = min(max_width / w, max_height / h)
     res = []
     pixels = img.load()
 

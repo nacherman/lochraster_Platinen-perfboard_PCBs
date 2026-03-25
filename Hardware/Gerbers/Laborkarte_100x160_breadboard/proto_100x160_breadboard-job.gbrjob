@@ -5,7 +5,7 @@
       "Application": "Pcbnew",
       "Version": "9.0.6"
     },
-    "CreationDate": "2026-03-25T19:20:42+01:00"
+    "CreationDate": "2026-03-25T19:52:43+01:00"
   },
   "GeneralSpecs": {
     "ProjectId": {
@@ -42,16 +42,6 @@
       "FilePolarity": "Positive"
     },
     {
-      "Path": "proto_100x160_breadboard-F_Adhes.gta",
-      "FileFunction": "Glue,Top",
-      "FilePolarity": "Positive"
-    },
-    {
-      "Path": "proto_100x160_breadboard-B_Adhes.gba",
-      "FileFunction": "Glue,Bot",
-      "FilePolarity": "Positive"
-    },
-    {
       "Path": "proto_100x160_breadboard-F_Paste.gtp",
       "FileFunction": "SolderPaste,Top",
       "FilePolarity": "Positive"
@@ -82,38 +72,8 @@
       "FilePolarity": "Negative"
     },
     {
-      "Path": "proto_100x160_breadboard-Dwgs_User.gbr",
-      "FileFunction": "Other,User",
-      "FilePolarity": "Positive"
-    },
-    {
-      "Path": "proto_100x160_breadboard-Cmts_User.gbr",
-      "FileFunction": "Other,User",
-      "FilePolarity": "Positive"
-    },
-    {
-      "Path": "proto_100x160_breadboard-Eco1_User.gbr",
-      "FileFunction": "Other,User",
-      "FilePolarity": "Positive"
-    },
-    {
-      "Path": "proto_100x160_breadboard-Eco2_User.gbr",
-      "FileFunction": "Other,User",
-      "FilePolarity": "Positive"
-    },
-    {
       "Path": "proto_100x160_breadboard-Edge_Cuts.gm1",
       "FileFunction": "Profile",
-      "FilePolarity": "Positive"
-    },
-    {
-      "Path": "proto_100x160_breadboard-F_Fab.gbr",
-      "FileFunction": "AssemblyDrawing,Top",
-      "FilePolarity": "Positive"
-    },
-    {
-      "Path": "proto_100x160_breadboard-B_Fab.gbr",
-      "FileFunction": "AssemblyDrawing,Bot",
       "FilePolarity": "Positive"
     }
   ],

@@ -21,10 +21,10 @@ Professionelle Lochraster-Platinen (Perfboards) im 2.54mm Raster, optimiert fuer
 <th>Steckbrett</th>
 </tr>
 <tr>
-<td><img src="images/proto_70x100_unconnected.png" width="180"/></td>
-<td><img src="images/proto_70x100_stripboard.png" width="180"/></td>
-<td><img src="images/proto_70x100_group_3.png" width="180"/></td>
-<td><img src="images/proto_70x100_breadboard.png" width="180"/></td>
+<td><img src="images/proto_70x100_unconnected.png" width="220"/></td>
+<td><img src="images/proto_70x100_stripboard.png" width="220"/></td>
+<td><img src="images/proto_70x100_group_3.png" width="220"/></td>
+<td><img src="images/proto_70x100_breadboard.png" width="220"/></td>
 </tr>
 <tr>
 <td>Einzelne Pads ohne Verbindung — maximale Flexibilitaet</td>
@@ -45,27 +45,27 @@ Professionelle Lochraster-Platinen (Perfboards) im 2.54mm Raster, optimiert fuer
 </tr>
 <tr style="background-color:#4a2066;">
 <td><b>Unverbunden</b></td>
-<td><img src="images/proto_50x70_unconnected.png" width="140"/></td>
-<td><img src="images/proto_70x100_unconnected.png" width="140"/></td>
-<td><img src="images/proto_100x160_unconnected.png" width="140"/></td>
+<td><img src="images/proto_50x70_unconnected.png" width="220"/></td>
+<td><img src="images/proto_70x100_unconnected.png" width="220"/></td>
+<td><img src="images/proto_100x160_unconnected.png" width="220"/></td>
 </tr>
 <tr style="background-color:#4a2066;">
 <td><b>Streifenraster</b></td>
-<td><img src="images/proto_50x70_stripboard.png" width="140"/></td>
-<td><img src="images/proto_70x100_stripboard.png" width="140"/></td>
-<td><img src="images/proto_100x160_stripboard.png" width="140"/></td>
+<td><img src="images/proto_50x70_stripboard.png" width="220"/></td>
+<td><img src="images/proto_70x100_stripboard.png" width="220"/></td>
+<td><img src="images/proto_100x160_stripboard.png" width="220"/></td>
 </tr>
 <tr style="background-color:#4a2066;">
 <td><b>3er-Gruppen</b></td>
-<td><img src="images/proto_50x70_group_3.png" width="140"/></td>
-<td><img src="images/proto_70x100_group_3.png" width="140"/></td>
-<td><img src="images/proto_100x160_group_3.png" width="140"/></td>
+<td><img src="images/proto_50x70_group_3.png" width="220"/></td>
+<td><img src="images/proto_70x100_group_3.png" width="220"/></td>
+<td><img src="images/proto_100x160_group_3.png" width="220"/></td>
 </tr>
 <tr style="background-color:#4a2066;">
 <td><b>Steckbrett</b></td>
-<td><img src="images/proto_50x70_breadboard.png" width="140"/></td>
-<td><img src="images/proto_70x100_breadboard.png" width="140"/></td>
-<td><img src="images/proto_100x160_breadboard.png" width="140"/></td>
+<td><img src="images/proto_50x70_breadboard.png" width="220"/></td>
+<td><img src="images/proto_70x100_breadboard.png" width="220"/></td>
+<td><img src="images/proto_100x160_breadboard.png" width="220"/></td>
 </tr>
 </table>
 
