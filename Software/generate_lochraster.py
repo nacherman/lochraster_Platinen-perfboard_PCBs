@@ -629,9 +629,47 @@ def generate_pcb(filename, width_mm, height_mm, board_type="unconnected", pitch_
         f.write(")\n")
 
 
+def ensure_blank_drawing_sheet():
+    """Create blank.kicad_wks so the KiCad page border never appears in Gerber exports."""
+    wks_path = "blank.kicad_wks"
+    if not os.path.exists(wks_path):
+        with open(wks_path, 'w') as f:
+            f.write('(kicad_wks (version 20171130) (generator "custom")\n')
+            f.write('  (setup (textsize 1.5 1.5)(linewidth 0.15)(textlinewidth 0.15)\n')
+            f.write('    (left_margin 0)(right_margin 0)(top_margin 0)(bottom_margin 0))\n')
+            f.write(')\n')
+        print(f"Created {wks_path}")
+
+
+def ensure_kicad_pro(pcb_filename):
+    """Create a minimal .kicad_pro referencing blank.kicad_wks if one doesn't exist."""
+    pro_path = pcb_filename.replace(".kicad_pcb", ".kicad_pro")
+    if os.path.exists(pro_path):
+        return
+    import json
+    pro = {
+        "board": {"design_settings": {"defaults": {}, "rules": {}}},
+        "meta": {"filename": os.path.basename(pro_path), "version": 3},
+        "net_settings": {"classes": [], "meta": {"version": 4}},
+        "pcbnew": {
+            "last_paths": {},
+            "page_layout_descr_file": "blank.kicad_wks"
+        },
+        "schematic": {},
+        "sheets": [],
+        "text_variables": {}
+    }
+    with open(pro_path, 'w') as f:
+        json.dump(pro, f, indent=2)
+        f.write('\n')
+    print(f"Created {pro_path}")
+
+
 if __name__ == "__main__":
+    ensure_blank_drawing_sheet()
     for w, h in [(100, 160), (70, 100), (50, 70)]:
         for t in ["unconnected", "stripboard", "group_3", "breadboard"]:
             fn = f"proto_{w}x{h}_{t}.kicad_pcb"
             generate_pcb(fn, w, h, t)
+            ensure_kicad_pro(fn)
             print(f"Generated {fn}")
